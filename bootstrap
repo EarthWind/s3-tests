@@ -20,8 +20,8 @@ case "$ID" in
             sudo apt-get -y install $missing
         fi
         ;;
-    centos|fedora|rhel|ol|virtuozzo)
 
+    centos|fedora|rhel|ol|virtuozzo)
         packages=(which python3-virtualenv python36-devel libevent-devel libffi-devel libxml2-devel libxslt-devel zlib-devel)
         for package in ${packages[@]}; do
             # When the package is python36-devel we change it to python3-devel on Fedora
@@ -38,8 +38,8 @@ case "$ID" in
             sudo yum -y install $missing
         fi
         ;;
-    opensuse*|suse|sles)
 
+    opensuse*|suse|sles)
         packages=(which python3-virtualenv python3-devel libev-devel libffi-devel libxml2-devel libxslt-devel zlib-devel)
         for package in ${packages[@]}; do
             if [ "$(rpm -qa $package 2>/dev/null)" == "" ]; then
@@ -57,7 +57,6 @@ case "$ID" in
         exit 1
 esac
 
-
 # s3-tests only works on python 3.6 not newer versions of python3
 ${virtualenv} --python=$(which python3.6) virtualenv
 
@@ -66,7 +65,6 @@ ${virtualenv} --python=$(which python3.6) virtualenv
 
 # latest setuptools supporting python 2.7
 ./virtualenv/bin/pip install setuptools==44.1.0
-
 ./virtualenv/bin/pip3 install -r requirements.txt
 
 # forbid setuptools from using the network because it'll try to use

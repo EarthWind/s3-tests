@@ -1,6 +1,5 @@
 [DEFAULT]
 ## this section is just used for host, port and bucket_prefix
-
 # host set for rgw in vstart.sh
 host = localhost
 
