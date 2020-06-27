@@ -54,3 +54,6 @@ You can run only the boto3 tests with::
 
     S3TEST_CONF=your.conf ./virtualenv/bin/nosetests -v -s -A 'not fails_on_rgw' s3tests_boto3.functional
 
+Run compatibility tests for MaTo:
+	./test.sh
+
