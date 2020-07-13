@@ -1,36 +1,23 @@
-import sys
+import boto3
+from botocore import UNSIGNED
+from botocore.client import Config
+from botocore.exceptions import ClientError
+from botocore.handlers import disable_signing
 import configparser
-import boto.exception
-import boto.s3.connection
-import munch
-import itertools
 import os
+import munch
 import random
 import string
-from http.client import HTTPConnection, HTTPSConnection
-from urllib.parse import urlparse
+import itertools
 
-from .utils import region_sync_meta
-
-s3 = munch.Munch()
-config = munch.Munch()
-targets = munch.Munch()
+config = munch.Munch
 
 # this will be assigned by setup()
 prefix = None
 
-calling_formats = dict(
-    ordinary=boto.s3.connection.OrdinaryCallingFormat(),
-    subdomain=boto.s3.connection.SubdomainCallingFormat(),
-    vhost=boto.s3.connection.VHostCallingFormat(),
-    )
-
 def get_prefix():
     assert prefix is not None
     return prefix
-
-def is_slow_backend():
-    return slow_backend
 
 def choose_bucket_prefix(template, max_len=30):
     """
@@ -56,209 +43,103 @@ def choose_bucket_prefix(template, max_len=30):
             ),
         )
 
+def get_buckets_list(client=None, prefix=None):
+    if client == None:
+        client = get_client()
+    if prefix == None:
+        prefix = get_prefix()
+    response = client.list_buckets()
+    bucket_dicts = response['Buckets']
+    buckets_list = []
+    for bucket in bucket_dicts:
+        if prefix in bucket['Name']:
+            buckets_list.append(bucket['Name'])
 
-def nuke_prefixed_buckets_on_conn(prefix, name, conn):
-    print('Cleaning buckets from connection {name} prefix {prefix!r}.'.format(
-        name=name,
-        prefix=prefix,
-        ))
+    return buckets_list
 
-    for bucket in conn.get_all_buckets():
-        print('prefix=',prefix)
-        if bucket.name.startswith(prefix):
-            print('Cleaning bucket {bucket}'.format(bucket=bucket))
-            success = False
-            for i in range(2):
-                try:
-                    try:
-                        iterator = iter(bucket.list_versions())
-                        # peek into iterator to issue list operation
-                        try:
-                            keys = itertools.chain([next(iterator)], iterator)
-                        except StopIteration:
-                            keys = []  # empty iterator
-                    except boto.exception.S3ResponseError as e:
-                        # some S3 implementations do not support object
-                        # versioning - fall back to listing without versions
-                        if e.error_code != 'NotImplemented':
-                            raise e
-                        keys = bucket.list();
-                    for key in keys:
-                        print('Cleaning bucket {bucket} key {key}'.format(
-                            bucket=bucket,
-                            key=key,
-                            ))
-                        # key.set_canned_acl('private')
-                        bucket.delete_key(key.name, version_id = key.version_id)
-                    try:
-                        bucket.delete()
-                    except boto.exception.S3ResponseError as e:
-                        # if DELETE times out, the retry may see NoSuchBucket
-                        if e.error_code != 'NoSuchBucket':
-                            raise e
-                        pass
-                    success = True
-                except boto.exception.S3ResponseError as e:
-                    if e.error_code != 'AccessDenied':
-                        print('GOT UNWANTED ERROR', e.error_code)
-                        raise
-                    # seems like we don't have permissions set appropriately, we'll
-                    # modify permissions and retry
-                    pass
+def get_objects_list(bucket, client=None, prefix=None):
+    if client == None:
+        client = get_client()
 
-                if success:
-                    break
+    if prefix == None:
+        response = client.list_objects(Bucket=bucket)
+    else:
+        response = client.list_objects(Bucket=bucket, Prefix=prefix)
+    objects_list = []
 
-                bucket.set_canned_acl('private')
+    if 'Contents' in response:
+        contents = response['Contents']
+        for obj in contents:
+            objects_list.append(obj['Key'])
 
+    return objects_list
 
-def nuke_prefixed_buckets(prefix):
-    # If no regions are specified, use the simple method
-    if targets.main.master == None:
-        for name, conn in list(s3.items()):
-            print('Deleting buckets on {name}'.format(name=name))
-            nuke_prefixed_buckets_on_conn(prefix, name, conn)
-    else: 
-		    # First, delete all buckets on the master connection 
-		    for name, conn in list(s3.items()):
-		        if conn == targets.main.master.connection:
-		            print('Deleting buckets on {name} (master)'.format(name=name))
-		            nuke_prefixed_buckets_on_conn(prefix, name, conn)
-		
-		    # Then sync to propagate deletes to secondaries
-		    region_sync_meta(targets.main, targets.main.master.connection)
-		    print('region-sync in nuke_prefixed_buckets')
-		
-		    # Now delete remaining buckets on any other connection 
-		    for name, conn in list(s3.items()):
-		        if conn != targets.main.master.connection:
-		            print('Deleting buckets on {name} (non-master)'.format(name=name))
-		            nuke_prefixed_buckets_on_conn(prefix, name, conn)
+def get_versioned_objects_list(bucket, client=None):
+    if client == None:
+        client = get_client()
+    response = client.list_object_versions(Bucket=bucket)
+    versioned_objects_list = []
 
-    print('Done with cleanup of test buckets.')
+    if 'Versions' in response:
+        contents = response['Versions']
+        for obj in contents:
+            key = obj['Key']
+            version_id = obj['VersionId']
+            versioned_obj = (key,version_id)
+            versioned_objects_list.append(versioned_obj)
 
-class TargetConfig:
-    def __init__(self, cfg, section):
-        self.port = None
-        self.api_name = ''
-        self.is_master = False
-        self.is_secure = False
-        self.sync_agent_addr = None
-        self.sync_agent_port = 0
-        self.sync_meta_wait = 0
-        try:
-            self.api_name = cfg.get(section, 'api_name')
-        except (configparser.NoSectionError, configparser.NoOptionError):
-            pass
-        try:
-            self.port = cfg.getint(section, 'port')
-        except configparser.NoOptionError:
-            pass
-        try:
-            self.host=cfg.get(section, 'host')
-        except configparser.NoOptionError:
-            raise RuntimeError(
-                'host not specified for section {s}'.format(s=section)
-                )
-        try:
-            self.is_master=cfg.getboolean(section, 'is_master')
-        except configparser.NoOptionError:
-            pass
+    return versioned_objects_list
 
-        try:
-            self.is_secure=cfg.getboolean(section, 'is_secure')
-        except configparser.NoOptionError:
-            pass
+def get_delete_markers_list(bucket, client=None):
+    if client == None:
+        client = get_client()
+    response = client.list_object_versions(Bucket=bucket)
+    delete_markers = []
 
-        try:
-            raw_calling_format = cfg.get(section, 'calling_format')
-        except configparser.NoOptionError:
-            raw_calling_format = 'ordinary'
+    if 'DeleteMarkers' in response:
+        contents = response['DeleteMarkers']
+        for obj in contents:
+            key = obj['Key']
+            version_id = obj['VersionId']
+            versioned_obj = (key,version_id)
+            delete_markers.append(versioned_obj)
 
-        try:
-            self.sync_agent_addr = cfg.get(section, 'sync_agent_addr')
-        except (configparser.NoSectionError, configparser.NoOptionError):
-            pass
-
-        try:
-            self.sync_agent_port = cfg.getint(section, 'sync_agent_port')
-        except (configparser.NoSectionError, configparser.NoOptionError):
-            pass
-
-        try:
-            self.sync_meta_wait = cfg.getint(section, 'sync_meta_wait')
-        except (configparser.NoSectionError, configparser.NoOptionError):
-            pass
+    return delete_markers
 
 
-        try:
-            self.calling_format = calling_formats[raw_calling_format]
-        except KeyError:
-            raise RuntimeError(
-                'calling_format unknown: %r' % raw_calling_format
-                )
+def nuke_prefixed_buckets(prefix, client=None):
+    if client == None:
+        client = get_client()
 
-class TargetConnection:
-    def __init__(self, conf, conn):
-        self.conf = conf
-        self.connection = conn
+    buckets = get_buckets_list(client, prefix)
 
+    err = None
+    if buckets != []:
+        for bucket_name in buckets:
+            objects_list = get_objects_list(bucket_name, client)
+            for obj in objects_list:
+                response = client.delete_object(Bucket=bucket_name,Key=obj)
+            versioned_objects_list = get_versioned_objects_list(bucket_name, client)
+            for obj in versioned_objects_list:
+                response = client.delete_object(Bucket=bucket_name,Key=obj[0],VersionId=obj[1])
+            delete_markers = get_delete_markers_list(bucket_name, client)
+            for obj in delete_markers:
+                response = client.delete_object(Bucket=bucket_name,Key=obj[0],VersionId=obj[1])
+            try:
+                response = client.delete_bucket(Bucket=bucket_name)
+            except ClientError as e:
+                # The exception shouldn't be raised when doing cleanup. Pass and continue
+                # the bucket cleanup process. Otherwise left buckets wouldn't be cleared
+                # resulting in some kind of resource leak. err is used to hint user some
+                # exception once occurred.
+                err = e
+                pass
+        if err:
+            raise err
 
-
-class RegionsInfo:
-    def __init__(self):
-        self.m = munch.Munch()
-        self.master = None
-        self.secondaries = []
-
-    def add(self, name, region_config):
-        self.m[name] = region_config
-        if (region_config.is_master):
-            if not self.master is None:
-                raise RuntimeError(
-                    'multiple regions defined as master'
-                    )
-            self.master = region_config
-        else:
-            self.secondaries.append(region_config)
-    def get(self, name):
-        return self.m[name]
-    def get(self):
-        return self.m
-    def items(self):
-        return self.m.items()
-
-regions = RegionsInfo()
-
-
-class RegionsConn:
-    def __init__(self):
-        self.m = munch.Munch()
-        self.default = None
-        self.master = None
-        self.secondaries = []
-
-    def items(self):
-        return self.m.items()
-
-    def set_default(self, conn):
-        self.default = conn
-
-    def add(self, name, conn):
-        self.m[name] = conn
-        if not self.default:
-            self.default = conn
-        if (conn.conf.is_master):
-            self.master = conn
-        else:
-            self.secondaries.append(conn)
-
-
-# nosetests --processes=N with N>1 is safe
-_multiprocess_can_split_ = True
+    print('Done with cleanup of buckets in tests.')
 
 def setup():
-
     cfg = configparser.RawConfigParser()
     try:
         path = os.environ['S3TEST_CONF']
@@ -269,110 +150,167 @@ def setup():
             )
     cfg.read(path)
 
+    if not cfg.defaults():
+        raise RuntimeError('Your config file is missing the DEFAULT section!')
+    if not cfg.has_section("s3 main"):
+        raise RuntimeError('Your config file is missing the "s3 main" section!')
+    if not cfg.has_section("s3 alt"):
+        raise RuntimeError('Your config file is missing the "s3 alt" section!')
+    if not cfg.has_section("s3 tenant"):
+        raise RuntimeError('Your config file is missing the "s3 tenant" section!')
+
     global prefix
-    global targets
-    global slow_backend
+
+    defaults = cfg.defaults()
+
+    # vars from the DEFAULT section
+    config.default_host = defaults.get("host")
+    config.default_port = int(defaults.get("port"))
+    config.default_is_secure = cfg.getboolean('DEFAULT', "is_secure")
+
+    proto = 'https' if config.default_is_secure else 'http'
+    config.default_endpoint = "%s://%s:%d" % (proto, config.default_host, config.default_port)
+
+    # vars from the main section
+    config.main_access_key = cfg.get('s3 main',"access_key")
+    config.main_secret_key = cfg.get('s3 main',"secret_key")
+    config.main_display_name = cfg.get('s3 main',"display_name")
+    config.main_user_id = cfg.get('s3 main',"user_id")
+    config.main_email = cfg.get('s3 main',"email")
+    try:
+        config.main_kms_keyid = cfg.get('s3 main',"kms_keyid")
+    except (configparser.NoSectionError, configparser.NoOptionError):
+        config.main_kms_keyid = 'testkey-1'
 
     try:
-        template = cfg.get('fixtures', 'bucket prefix')
+        config.main_kms_keyid2 = cfg.get('s3 main',"kms_keyid2")
     except (configparser.NoSectionError, configparser.NoOptionError):
+        config.main_kms_keyid2 = 'testkey-2'
+
+    try:
+        config.main_api_name = cfg.get('s3 main',"api_name")
+    except (configparser.NoSectionError, configparser.NoOptionError):
+        config.main_api_name = ""
+        pass
+
+    config.alt_access_key = cfg.get('s3 alt',"access_key")
+    config.alt_secret_key = cfg.get('s3 alt',"secret_key")
+    config.alt_display_name = cfg.get('s3 alt',"display_name")
+    config.alt_user_id = cfg.get('s3 alt',"user_id")
+    config.alt_email = cfg.get('s3 alt',"email")
+
+    config.tenant_access_key = cfg.get('s3 tenant',"access_key")
+    config.tenant_secret_key = cfg.get('s3 tenant',"secret_key")
+    config.tenant_display_name = cfg.get('s3 tenant',"display_name")
+    config.tenant_user_id = cfg.get('s3 tenant',"user_id")
+    config.tenant_email = cfg.get('s3 tenant',"email")
+
+    # vars from the fixtures section
+    try:
+        template = cfg.get('fixtures', "bucket prefix")
+    except (configparser.NoOptionError):
         template = 'test-{random}-'
     prefix = choose_bucket_prefix(template=template)
 
-    try:
-        slow_backend = cfg.getboolean('fixtures', 'slow backend')
-    except (configparser.NoSectionError, configparser.NoOptionError):
-        slow_backend = False
-
-    # pull the default_region out, if it exists
-    try:
-        default_region = cfg.get('fixtures', 'default_region')
-    except (configparser.NoSectionError, configparser.NoOptionError):
-        default_region = None
-
-    s3.clear()
-    config.clear()
-
-    for section in cfg.sections():
-        try:
-            (type_, name) = section.split(None, 1)
-        except ValueError:
-            continue
-        if type_ != 'region':
-            continue
-        regions.add(name, TargetConfig(cfg, section))
-
-    for section in cfg.sections():
-        try:
-            (type_, name) = section.split(None, 1)
-        except ValueError:
-            continue
-        if type_ != 's3':
-            continue
-
-        if len(regions.get()) == 0:
-            regions.add("default", TargetConfig(cfg, section))
-
-        config[name] = munch.Munch()
-        for var in [
-            'user_id',
-            'display_name',
-            'email',
-            's3website_domain',
-            'host',
-            'port',
-            'is_secure',
-            'kms_keyid',
-            'storage_classes',
-            ]:
-            try:
-                config[name][var] = cfg.get(section, var)
-            except configparser.NoOptionError:
-                pass
-
-        targets[name] = RegionsConn()
-
-        for (k, conf) in regions.items():
-            conn = boto.s3.connection.S3Connection(
-                aws_access_key_id=cfg.get(section, 'access_key'),
-                aws_secret_access_key=cfg.get(section, 'secret_key'),
-                is_secure=conf.is_secure,
-                port=conf.port,
-                host=conf.host,
-                # TODO test vhost calling format
-                calling_format=conf.calling_format,
-                )
-
-            temp_targetConn = TargetConnection(conf, conn)
-            targets[name].add(k, temp_targetConn)
-
-            # Explicitly test for and set the default region, if specified.
-            # If it was not specified, use the 'is_master' flag to set it.
-            if default_region:
-                if default_region == name:
-                    targets[name].set_default(temp_targetConn)
-            elif conf.is_master:
-                targets[name].set_default(temp_targetConn)
-
-        s3[name] = targets[name].default.connection
-
-    # WARNING! we actively delete all buckets we see with the prefix
-    # we've chosen! Choose your prefix with care, and don't reuse
-    # credentials!
-
-    # We also assume nobody else is going to use buckets with that
-    # prefix. This is racy but given enough randomness, should not
-    # really fail.
+    alt_client = get_alt_client()
+    tenant_client = get_tenant_client()
     nuke_prefixed_buckets(prefix=prefix)
-
+    nuke_prefixed_buckets(prefix=prefix, client=alt_client)
+    nuke_prefixed_buckets(prefix=prefix, client=tenant_client)
 
 def teardown():
-    # remove our buckets here also, to avoid littering
+    alt_client = get_alt_client()
+    tenant_client = get_tenant_client()
     nuke_prefixed_buckets(prefix=prefix)
+    nuke_prefixed_buckets(prefix=prefix, client=alt_client)
+    nuke_prefixed_buckets(prefix=prefix, client=tenant_client)
 
+def get_client(client_config=None):
+    if client_config == None:
+        client_config = Config(signature_version='s3v4')
+
+    client = boto3.client(service_name='s3',
+                        aws_access_key_id=config.main_access_key,
+                        aws_secret_access_key=config.main_secret_key,
+                        endpoint_url=config.default_endpoint,
+                        use_ssl=config.default_is_secure,
+                        config=client_config)
+    return client
+
+def get_v2_client():
+    client = boto3.client(service_name='s3',
+                        aws_access_key_id=config.main_access_key,
+                        aws_secret_access_key=config.main_secret_key,
+                        endpoint_url=config.default_endpoint,
+                        use_ssl=config.default_is_secure,
+                        config=Config(signature_version='s3'))
+    return client
+
+def get_alt_client(client_config=None):
+    if client_config == None:
+        client_config = Config(signature_version='s3v4')
+
+    client = boto3.client(service_name='s3',
+                        aws_access_key_id=config.alt_access_key,
+                        aws_secret_access_key=config.alt_secret_key,
+                        endpoint_url=config.default_endpoint,
+                        use_ssl=config.default_is_secure,
+                        config=client_config)
+    return client
+
+def get_tenant_client(client_config=None):
+    if client_config == None:
+        client_config = Config(signature_version='s3v4')
+
+    client = boto3.client(service_name='s3',
+                        aws_access_key_id=config.tenant_access_key,
+                        aws_secret_access_key=config.tenant_secret_key,
+                        endpoint_url=config.default_endpoint,
+                        use_ssl=config.default_is_secure,
+                        config=client_config)
+    return client
+
+def get_tenant_iam_client():
+
+    client = boto3.client(service_name='iam',
+                          region_name='us-east-1',
+                          aws_access_key_id=config.tenant_access_key,
+                          aws_secret_access_key=config.tenant_secret_key,
+                          endpoint_url=config.default_endpoint,
+                          use_ssl=config.default_is_secure)
+    return client
+
+def get_unauthenticated_client():
+    client = boto3.client(service_name='s3',
+                        aws_access_key_id='',
+                        aws_secret_access_key='',
+                        endpoint_url=config.default_endpoint,
+                        use_ssl=config.default_is_secure,
+                        config=Config(signature_version=UNSIGNED))
+    return client
+
+def get_bad_auth_client(aws_access_key_id='badauth'):
+    client = boto3.client(service_name='s3',
+                        aws_access_key_id=aws_access_key_id,
+                        aws_secret_access_key='roflmao',
+                        endpoint_url=config.default_endpoint,
+                        use_ssl=config.default_is_secure,
+                        config=Config(signature_version='s3v4'))
+    return client
+
+def get_svc_client(client_config=None, svc='s3'):
+    if client_config == None:
+        client_config = Config(signature_version='s3v4')
+
+    client = boto3.client(service_name=svc,
+                        aws_access_key_id=config.main_access_key,
+                        aws_secret_access_key=config.main_secret_key,
+                        endpoint_url=config.default_endpoint,
+                        use_ssl=config.default_is_secure,
+                        config=client_config)
+    return client
 
 bucket_counter = itertools.count(1)
-
 
 def get_new_bucket_name():
     """
@@ -388,101 +326,102 @@ def get_new_bucket_name():
         )
     return name
 
-
-def get_new_bucket(target=None, name=None, headers=None):
+def get_new_bucket_resource(name=None):
     """
     Get a bucket that exists and is empty.
 
     Always recreates a bucket from scratch. This is useful to also
     reset ACLs and such.
     """
-    if target is None:
-        target = targets.main.default
-    connection = target.connection
+    s3 = boto3.resource('s3',
+                        aws_access_key_id=config.main_access_key,
+                        aws_secret_access_key=config.main_secret_key,
+                        endpoint_url=config.default_endpoint,
+                        use_ssl=config.default_is_secure)
     if name is None:
         name = get_new_bucket_name()
-    # the only way for this to fail with a pre-existing bucket is if
-    # someone raced us between setup nuke_prefixed_buckets and here;
-    # ignore that as astronomically unlikely
-    bucket = connection.create_bucket(name, location=target.conf.api_name, headers=headers)
+    bucket = s3.Bucket(name)
+    bucket_location = bucket.create()
     return bucket
 
-def _make_request(method, bucket, key, body=None, authenticated=False, response_headers=None, request_headers=None, expires_in=100000, path_style=True, timeout=None):
+def get_new_bucket(client=None, name=None):
     """
-    issue a request for a specified method, on a specified <bucket,key>,
-    with a specified (optional) body (encrypted per the connection), and
-    return the response (status, reason).
+    Get a bucket that exists and is empty.
 
-    If key is None, then this will be treated as a bucket-level request.
-
-    If the request or response headers are None, then default values will be
-    provided by later methods.
+    Always recreates a bucket from scratch. This is useful to also
+    reset ACLs and such.
     """
-    if not path_style:
-        conn = bucket.connection
-        request_headers['Host'] = conn.calling_format.build_host(conn.server_name(), bucket.name)
+    if client is None:
+        client = get_client()
+    if name is None:
+        name = get_new_bucket_name()
 
-    if authenticated:
-        urlobj = None
-        if key is not None:
-            urlobj = key
-        elif bucket is not None:
-            urlobj = bucket
-        else:
-            raise RuntimeError('Unable to find bucket name')
-        url = urlobj.generate_url(expires_in, method=method, response_headers=response_headers, headers=request_headers)
-        o = urlparse(url)
-        path = o.path + '?' + o.query
-    else:
-        bucketobj = None
-        if key is not None:
-            path = '/{obj}'.format(obj=key.name)
-            bucketobj = key.bucket
-        elif bucket is not None:
-            path = '/'
-            bucketobj = bucket
-        else:
-            raise RuntimeError('Unable to find bucket name')
-        if path_style:
-            path = '/{bucket}'.format(bucket=bucketobj.name) + path
-
-    return _make_raw_request(host=s3.main.host, port=s3.main.port, method=method, path=path, body=body, request_headers=request_headers, secure=s3.main.is_secure, timeout=timeout)
-
-def _make_bucket_request(method, bucket, body=None, authenticated=False, response_headers=None, request_headers=None, expires_in=100000, path_style=True, timeout=None):
-    """
-    issue a request for a specified method, on a specified <bucket>,
-    with a specified (optional) body (encrypted per the connection), and
-    return the response (status, reason)
-    """
-    return _make_request(method=method, bucket=bucket, key=None, body=body, authenticated=authenticated, response_headers=response_headers, request_headers=request_headers, expires_in=expires_in, path_style=path_style, timeout=timeout)
-
-def _make_raw_request(host, port, method, path, body=None, request_headers=None, secure=False, timeout=None):
-    """
-    issue a request to a specific host & port, for a specified method, on a
-    specified path with a specified (optional) body (encrypted per the
-    connection), and return the response (status, reason).
-
-    This allows construction of special cases not covered by the bucket/key to
-    URL mapping of _make_request/_make_bucket_request.
-    """
-    if secure:
-        class_ = HTTPSConnection
-    else:
-        class_ = HTTPConnection
-
-    if request_headers is None:
-        request_headers = {}
-
-    c = class_(host, port=port, timeout=timeout)
-
-    # TODO: We might have to modify this in future if we need to interact with
-    # how httplib.request handles Accept-Encoding and Host.
-    c.request(method, path, body=body, headers=request_headers)
-
-    res = c.getresponse()
-    #c.close()
-
-    print(res.status, res.reason)
-    return res
+    client.create_bucket(Bucket=name)
+    return name
 
 
+def get_config_is_secure():
+    return config.default_is_secure
+
+def get_config_host():
+    return config.default_host
+
+def get_config_port():
+    return config.default_port
+
+def get_config_endpoint():
+    return config.default_endpoint
+
+def get_main_aws_access_key():
+    return config.main_access_key
+
+def get_main_aws_secret_key():
+    return config.main_secret_key
+
+def get_main_display_name():
+    return config.main_display_name
+
+def get_main_user_id():
+    return config.main_user_id
+
+def get_main_email():
+    return config.main_email
+
+def get_main_api_name():
+    return config.main_api_name
+
+def get_main_kms_keyid():
+    return config.main_kms_keyid
+
+def get_secondary_kms_keyid():
+    return config.main_kms_keyid2
+
+def get_alt_aws_access_key():
+    return config.alt_access_key
+
+def get_alt_aws_secret_key():
+    return config.alt_secret_key
+
+def get_alt_display_name():
+    return config.alt_display_name
+
+def get_alt_user_id():
+    return config.alt_user_id
+
+def get_alt_email():
+    return config.alt_email
+
+def get_tenant_aws_access_key():
+    return config.tenant_access_key
+
+def get_tenant_aws_secret_key():
+    return config.tenant_secret_key
+
+def get_tenant_display_name():
+    return config.tenant_display_name
+
+def get_tenant_user_id():
+    return config.tenant_user_id
+
+def get_tenant_email():
+    return config.tenant_email
