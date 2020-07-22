@@ -1,3 +1,77 @@
+import boto3
+import botocore.session
+from botocore.exceptions import ClientError
+from botocore.exceptions import ParamValidationError
+from nose.tools import eq_ as eq
+from nose.plugins.attrib import attr
+from nose.plugins.skip import SkipTest
+import isodate
+import email.utils
+import datetime
+import threading
+import re
+import pytz
+from collections import OrderedDict
+import requests
+import json
+import base64
+import hmac
+import hashlib
+import xml.etree.ElementTree as ET
+import time
+import operator
+import nose
+import os
+import string
+import random
+import socket
+import ssl
+from collections import namedtuple
+
+from email.header import decode_header
+
+from .utils import assert_raises
+from .utils import generate_random
+from .utils import _get_status_and_error_code
+from .utils import _get_status
+
+from .policy import Policy, Statement, make_json_policy
+
+from . import (
+    get_client,
+    get_prefix,
+    get_unauthenticated_client,
+    get_bad_auth_client,
+    get_v2_client,
+    get_new_bucket,
+    get_new_bucket_name,
+    get_new_bucket_resource,
+    get_config_is_secure,
+    get_config_host,
+    get_config_port,
+    get_config_endpoint,
+    get_main_aws_access_key,
+    get_main_aws_secret_key,
+    get_main_display_name,
+    get_main_user_id,
+    get_main_email,
+    get_main_api_name,
+    get_alt_aws_access_key,
+    get_alt_aws_secret_key,
+    get_alt_display_name,
+    get_alt_user_id,
+    get_alt_email,
+    get_alt_client,
+    get_tenant_client,
+    get_tenant_iam_client,
+    get_tenant_user_id,
+    get_buckets_list,
+    get_objects_list,
+    get_main_kms_keyid,
+    get_secondary_kms_keyid,
+    get_svc_client,
+    nuke_prefixed_buckets,
+    )
 
 def _bucket_is_empty(bucket):
     is_empty = True
@@ -5,6 +79,28 @@ def _bucket_is_empty(bucket):
         is_empty = False
         break
     return is_empty
+
+def _create_objects(bucket=None, bucket_name=None, keys=[]):
+    """
+    Populate a (specified or new) bucket with objects with
+    specified names (and contents identical to their names).
+    """
+    if bucket_name is None:
+        bucket_name = get_new_bucket_name()
+    if bucket is None:
+        bucket = get_new_bucket_resource(name=bucket_name)
+
+    for key in keys:
+        obj = bucket.put_object(Body=key, Key=key)
+
+    return bucket_name
+
+def _get_body(response):
+    body = response['Body']
+    got = body.read()
+    if type(got) is bytes:
+        got = got.decode()
+    return got
 
 def check_bad_bucket_name(bucket_name):
     """
@@ -2432,3 +2528,41 @@ def test_bucket_concurrent_set_canned_acl():
 
     for r in results:
         eq(r, True)
+
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='list all buckets (anonymous)')
+@attr(assertion='succeeds')
+@attr('fails_on_aws')
+def test_list_buckets_anonymous():
+    # Get a connection with bad authorization, then change it to be our new Anonymous auth mechanism,
+    # emulating standard HTTP access.
+    #
+    # While it may have been possible to use httplib directly, doing it this way takes care of also
+    # allowing us to vary the calling format in testing.
+    unauthenticated_client = get_unauthenticated_client()
+    response = unauthenticated_client.list_buckets()
+    eq(len(response['Buckets']), 0)
+
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='list all buckets (bad auth)')
+@attr(assertion='fails 403')
+def test_list_buckets_invalid_auth():
+    bad_auth_client = get_bad_auth_client()
+    e = assert_raises(ClientError, bad_auth_client.list_buckets)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 403)
+    eq(error_code, 'InvalidAccessKeyId')
+
+@attr(resource='bucket')
+@attr(method='get')
+@attr(operation='list all buckets (bad auth)')
+@attr(assertion='fails 403')
+def test_list_buckets_bad_auth():
+    main_access_key = get_main_aws_access_key()
+    bad_auth_client = get_bad_auth_client(aws_access_key_id=main_access_key)
+    e = assert_raises(ClientError, bad_auth_client.list_buckets)
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 403)
+    eq(error_code, 'SignatureDoesNotMatch')

@@ -1,3 +1,76 @@
+import boto3
+import botocore.session
+from botocore.exceptions import ClientError
+from botocore.exceptions import ParamValidationError
+from nose.tools import eq_ as eq
+from nose.plugins.attrib import attr
+from nose.plugins.skip import SkipTest
+import isodate
+import email.utils
+import datetime
+import threading
+import re
+import pytz
+from collections import OrderedDict
+import requests
+import json
+import base64
+import hmac
+import hashlib
+import xml.etree.ElementTree as ET
+import time
+import operator
+import nose
+import os
+import string
+import random
+import socket
+import ssl
+from collections import namedtuple
+
+from email.header import decode_header
+
+from .utils import assert_raises
+from .utils import generate_random
+from .utils import _get_status_and_error_code
+from .utils import _get_status
+from .policy import Policy, Statement, make_json_policy
+
+from . import (
+    get_client,
+    get_prefix,
+    get_unauthenticated_client,
+    get_bad_auth_client,
+    get_v2_client,
+    get_new_bucket,
+    get_new_bucket_name,
+    get_new_bucket_resource,
+    get_config_is_secure,
+    get_config_host,
+    get_config_port,
+    get_config_endpoint,
+    get_main_aws_access_key,
+    get_main_aws_secret_key,
+    get_main_display_name,
+    get_main_user_id,
+    get_main_email,
+    get_main_api_name,
+    get_alt_aws_access_key,
+    get_alt_aws_secret_key,
+    get_alt_display_name,
+    get_alt_user_id,
+    get_alt_email,
+    get_alt_client,
+    get_tenant_client,
+    get_tenant_iam_client,
+    get_tenant_user_id,
+    get_buckets_list,
+    get_objects_list,
+    get_main_kms_keyid,
+    get_secondary_kms_keyid,
+    get_svc_client,
+    nuke_prefixed_buckets,
+    )
 
 def _create_objects(bucket=None, bucket_name=None, keys=[]):
     """
@@ -14,6 +87,27 @@ def _create_objects(bucket=None, bucket_name=None, keys=[]):
 
     return bucket_name
 
+def _setup_bucket_object_acl(bucket_acl, object_acl):
+    """
+    add a foo key, and specified key and bucket acls to
+    a (new or existing) bucket.
+    """
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+    client.create_bucket(ACL=bucket_acl, Bucket=bucket_name)
+    client.put_object(ACL=object_acl, Bucket=bucket_name, Key='foo')
+
+    return bucket_name
+
+def _setup_bucket_acl(bucket_acl=None):
+    """
+    set up a new bucket with specified acl
+    """
+    bucket_name = get_new_bucket_name()
+    client = get_client()
+    client.create_bucket(ACL=bucket_acl, Bucket=bucket_name)
+
+    return bucket_name
 
 @attr(resource='object')
 @attr(method='put')
@@ -484,31 +578,6 @@ def test_object_copy_not_owned_bucket():
 
 @attr(resource='object')
 @attr(method='put')
-@attr(operation='copy a non-owned object in a non-owned bucket, but with perms')
-@attr(assertion='works')
-def test_object_copy_not_owned_object_bucket():
-    client = get_client()
-    alt_client = get_alt_client()
-    bucket_name = get_new_bucket_name()
-    client.create_bucket(Bucket=bucket_name)
-    client.put_object(Bucket=bucket_name, Key='foo123bar', Body='foo')
-
-    alt_user_id = get_alt_user_id()
-
-    grant = {'Grantee': {'ID': alt_user_id, 'Type': 'CanonicalUser' }, 'Permission': 'FULL_CONTROL'}
-    grants = add_obj_user_grant(bucket_name, 'foo123bar', grant)
-    client.put_object_acl(Bucket=bucket_name, Key='foo123bar', AccessControlPolicy=grants)
-
-    grant = add_bucket_user_grant(bucket_name, grant)
-    client.put_bucket_acl(Bucket=bucket_name, AccessControlPolicy=grant)
-
-    alt_client.get_object(Bucket=bucket_name, Key='foo123bar')
-
-    copy_source = {'Bucket': bucket_name, 'Key': 'foo123bar'}
-    alt_client.copy(copy_source, bucket_name, 'bar321foo')
-
-@attr(resource='object')
-@attr(method='put')
 @attr(operation='copy object and change acl')
 @attr(assertion='works')
 def test_object_copy_canned_acl():
@@ -568,4 +637,140 @@ def test_object_read_unreadable():
     eq(status, 400)
     eq(e.response['Error']['Message'], 'Couldn\'t parse the specified URI.')
 
+@attr(resource='object')
+@attr(method='post')
+@attr(operation='delete multiple objects with list-objects-v2')
+@attr(assertion='deletes multiple objects with a single call')
+@attr('list-objects-v2')
+def test_multi_objectv2_delete():
+    key_names = ['key0', 'key1', 'key2']
+    bucket_name = _create_objects(keys=key_names)
+    client = get_client()
+    response = client.list_objects_v2(Bucket=bucket_name)
+    eq(len(response['Contents']), 3)
+
+    objs_dict = _make_objs_dict(key_names=key_names)
+    response = client.delete_objects(Bucket=bucket_name, Delete=objs_dict)
+
+    eq(len(response['Deleted']), 3)
+    assert 'Errors' not in response
+    response = client.list_objects_v2(Bucket=bucket_name)
+    assert 'Contents' not in response
+
+    response = client.delete_objects(Bucket=bucket_name, Delete=objs_dict)
+    eq(len(response['Deleted']), 3)
+    assert 'Errors' not in response
+    response = client.list_objects_v2(Bucket=bucket_name)
+    assert 'Contents' not in response
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='range')
+@attr(assertion='returns correct data, 206')
+def test_ranged_request_response_code():
+    content = 'testcontent'
+
+    bucket_name = get_new_bucket()
+    client = get_client()
+
+    client.put_object(Bucket=bucket_name, Key='testobj', Body=content)
+    response = client.get_object(Bucket=bucket_name, Key='testobj', Range='bytes=4-7')
+
+    fetched_content = _get_body(response)
+    eq(fetched_content, content[4:8])
+    eq(response['ResponseMetadata']['HTTPHeaders']['content-range'], 'bytes 4-7/11')
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 206)
+
+def _generate_random_string(size):
+    return ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(size))
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='range')
+@attr(assertion='returns correct data, 206')
+def test_ranged_big_request_response_code():
+    content = _generate_random_string(8*1024*1024)
+
+    bucket_name = get_new_bucket()
+    client = get_client()
+
+    client.put_object(Bucket=bucket_name, Key='testobj', Body=content)
+    response = client.get_object(Bucket=bucket_name, Key='testobj', Range='bytes=3145728-5242880')
+
+    fetched_content = _get_body(response)
+    eq(fetched_content, content[3145728:5242881])
+    eq(response['ResponseMetadata']['HTTPHeaders']['content-range'], 'bytes 3145728-5242880/8388608')
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 206)
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='range')
+@attr(assertion='returns correct data, 206')
+def test_ranged_request_skip_leading_bytes_response_code():
+    content = 'testcontent'
+
+    bucket_name = get_new_bucket()
+    client = get_client()
+
+    client.put_object(Bucket=bucket_name, Key='testobj', Body=content)
+    response = client.get_object(Bucket=bucket_name, Key='testobj', Range='bytes=4-')
+
+    fetched_content = _get_body(response)
+    eq(fetched_content, content[4:])
+    eq(response['ResponseMetadata']['HTTPHeaders']['content-range'], 'bytes 4-10/11')
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 206)
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='range')
+@attr(assertion='returns correct data, 206')
+def test_ranged_request_return_trailing_bytes_response_code():
+    content = 'testcontent'
+
+    bucket_name = get_new_bucket()
+    client = get_client()
+
+    client.put_object(Bucket=bucket_name, Key='testobj', Body=content)
+    response = client.get_object(Bucket=bucket_name, Key='testobj', Range='bytes=-7')
+
+    fetched_content = _get_body(response)
+    eq(fetched_content, content[-7:])
+    eq(response['ResponseMetadata']['HTTPHeaders']['content-range'], 'bytes 4-10/11')
+    eq(response['ResponseMetadata']['HTTPStatusCode'], 206)
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='range')
+@attr(assertion='returns invalid range, 416')
+def test_ranged_request_invalid_range():
+    content = 'testcontent'
+
+    bucket_name = get_new_bucket()
+    client = get_client()
+
+    client.put_object(Bucket=bucket_name, Key='testobj', Body=content)
+
+    # test invalid range
+    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='testobj', Range='bytes=40-50')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 416)
+    eq(error_code, 'InvalidRange')
+
+@attr(resource='object')
+@attr(method='get')
+@attr(operation='range')
+@attr(assertion='returns invalid range, 416')
+def test_ranged_request_empty_object():
+    content = ''
+
+    bucket_name = get_new_bucket()
+    client = get_client()
+
+    client.put_object(Bucket=bucket_name, Key='testobj', Body=content)
+
+    # test invalid range
+    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='testobj', Range='bytes=40-50')
+    status, error_code = _get_status_and_error_code(e.response)
+    eq(status, 416)
+    eq(error_code, 'InvalidRange')
 
