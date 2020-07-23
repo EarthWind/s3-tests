@@ -34,7 +34,6 @@ from .utils import assert_raises
 from .utils import generate_random
 from .utils import _get_status_and_error_code
 from .utils import _get_status
-from .policy import Policy, Statement, make_json_policy
 
 from . import (
     get_client,
@@ -71,6 +70,24 @@ from . import (
     get_svc_client,
     nuke_prefixed_buckets,
     )
+
+def _get_body(response):
+    body = response['Body']
+    got = body.read()
+    if type(got) is bytes:
+        got = got.decode()
+    return got
+
+def _get_post_url(bucket_name):
+    endpoint = get_config_endpoint()
+    return '{endpoint}/{bucket_name}'.format(endpoint=endpoint, bucket_name=bucket_name)
+
+def _create_simple_tagset(count):
+    tagset = []
+    for i in range(count):
+        tagset.append({'Key': str(i), 'Value': str(i)})
+
+    return {'TagSet': tagset}
 
 @attr(resource='object')
 @attr(method='post')

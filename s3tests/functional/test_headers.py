@@ -159,7 +159,6 @@ def tag(*tags):
 #
 # common tests
 #
-
 @tag('auth_common')
 @attr(resource='object')
 @attr(method='put')

@@ -34,7 +34,6 @@ from .utils import assert_raises
 from .utils import generate_random
 from .utils import _get_status_and_error_code
 from .utils import _get_status
-from .policy import Policy, Statement, make_json_policy
 
 from . import (
     get_client,

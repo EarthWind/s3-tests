@@ -92,10 +92,6 @@ def _set_get_metadata(metadata, bucket_name=None):
     response = client.get_object(Bucket=bucket_name, Key='foo')
     return response['Metadata']['meta1']
 
-def _get_post_url(bucket_name):
-    endpoint = get_config_endpoint()
-    return '{endpoint}/{bucket_name}'.format(endpoint=endpoint, bucket_name=bucket_name)
-
 
 def _setup_bucket_object_acl(bucket_acl, object_acl):
     """
@@ -692,12 +688,7 @@ def check_lifecycle_expiration_header(response, start_time, rule_id,
 
     return True
 
-def _create_simple_tagset(count):
-    tagset = []
-    for i in range(count):
-        tagset.append({'Key': str(i), 'Value': str(i)})
 
-    return {'TagSet': tagset}
 
 def _make_random_string(size):
     return ''.join(random.choice(string.ascii_letters) for _ in range(size))

@@ -35,41 +35,20 @@ from .utils import generate_random
 from .utils import _get_status_and_error_code
 from .utils import _get_status
 
-from .policy import Policy, Statement, make_json_policy
-
 from . import (
     get_client,
     get_prefix,
     get_unauthenticated_client,
     get_bad_auth_client,
-    get_v2_client,
     get_new_bucket,
     get_new_bucket_name,
     get_new_bucket_resource,
-    get_config_is_secure,
-    get_config_host,
-    get_config_port,
-    get_config_endpoint,
-    get_main_aws_access_key,
-    get_main_aws_secret_key,
     get_main_display_name,
     get_main_user_id,
-    get_main_email,
     get_main_api_name,
-    get_alt_aws_access_key,
-    get_alt_aws_secret_key,
-    get_alt_display_name,
-    get_alt_user_id,
-    get_alt_email,
     get_alt_client,
-    get_tenant_client,
-    get_tenant_iam_client,
-    get_tenant_user_id,
     get_buckets_list,
     get_objects_list,
-    get_main_kms_keyid,
-    get_secondary_kms_keyid,
-    get_svc_client,
     nuke_prefixed_buckets,
     )
 
@@ -814,7 +793,7 @@ def test_buckets_create_then_list():
 
     for name in bucket_names:
         if name not in buckets_list:
-            raise RuntimeError("S3 implementation's GET on Service did not return bucket we created: %r", bucket.name)
+            raise RuntimeError("S3 implementation's GET on Service did not return bucket we created: %r", name)
 
 @attr(resource='bucket')
 @attr(method='del')
