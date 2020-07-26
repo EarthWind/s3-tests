@@ -1,5 +1,5 @@
 PyYAML
-nose >=1.0.0
+pytest >=5.4.3
 boto3 >=1.0.0
 munch >=2.0.0
 # 0.14 switches to libev, that means bootstrap needs to change too

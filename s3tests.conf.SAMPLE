@@ -1,69 +1,37 @@
 [DEFAULT]
-## this section is just used for host, port and bucket_prefix
+# this section is just used for host, port and bucket_prefix
 host = localhost
-
 # port of mato gateway
 port = 8000
-
-## say "False" to disable TLS
+# say "False" to disable TLS
 is_secure = False
 
 [fixtures]
 ## all the buckets created will start with this prefix;
 ## {random} will be filled with random characters to pad
 ## the prefix to 30 characters long, and avoid collisions
-bucket prefix = yournamehere-{random}-
+bucket prefix = mato-{random}-
 
 [s3 main]
 # main display_name
-display_name = M. Tester
-
+display_name = Mato.Tester.Main
 # main user_idname
 user_id = testid
-
 # main email
-email = tester@ceph.com
-
+email = tester_main@mato.com
 # zonegroup api_name for bucket location
 api_name = default
-
-## main AWS access key
+# main AWS access key
 access_key = 0555b35654ad1656d804
-
-## main AWS secret key
+# main AWS secret key
 secret_key = secret_key
-
-## replace with key id obtained when secret is created, or delete if KMS not tested
-#kms_keyid = 01234567-89ab-cdef-0123-456789abcdef
 
 [s3 alt]
 # alt display_name
-display_name = john.doe
-
-## alt email
-email = john.doe@example.com
-
+display_name = Mato.Tester.Alt
 # alt user_id
 user_id = 56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234
-
 # alt AWS access key
 access_key = NOPQRSTUVWXYZABCDEFG
-
 # alt AWS secret key
 secret_key = nopqrstuvwxyzabcdefghijklmnabcdefghijklm
-
-[s3 tenant]
-# tenant display_name
-display_name = testx$tenanteduser
-
-# tenant user_id
-user_id = 9876543210abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-
-# tenant AWS secret
-access_key = HIJKLMNOPQRSTUVWXYZA
-
-# tenant AWS secret key
-secret_key = opqrstuvwxyzabcdefghijklmnopqrstuvwxyzab
-
-# tenant email
-email = tenanteduser@example.com

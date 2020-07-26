@@ -9,11 +9,11 @@ import munch
 import random
 import string
 import itertools
+import pytest
 
 config = munch.Munch
-
-# this will be assigned by setup()
 prefix = None
+bucket_counter = itertools.count(1)
 
 def get_prefix():
     assert prefix is not None
@@ -30,7 +30,6 @@ def choose_bucket_prefix(template, max_len=30):
         random.choice(string.ascii_lowercase + string.digits)
         for c in range(255)
         )
-
     while rand:
         s = template.format(random=rand)
         if len(s) <= max_len:
@@ -139,7 +138,9 @@ def nuke_prefixed_buckets(prefix, client=None):
 
     print('Done with cleanup of buckets in tests.')
 
-def setup():
+@pytest.fixture(scope="session", autouse=True)
+def read_configuration():
+    # read configure file
     cfg = configparser.RawConfigParser()
     try:
         path = os.environ['S3TEST_CONF']
@@ -149,7 +150,6 @@ def setup():
             + 'variable S3TEST_CONF to a config file.',
             )
     cfg.read(path)
-
     if not cfg.defaults():
         raise RuntimeError('Your config file is missing the DEFAULT section!')
     if not cfg.has_section("s3 main"):
@@ -160,14 +160,12 @@ def setup():
         raise RuntimeError('Your config file is missing the "s3 tenant" section!')
 
     global prefix
-
     defaults = cfg.defaults()
 
     # vars from the DEFAULT section
     config.default_host = defaults.get("host")
     config.default_port = int(defaults.get("port"))
     config.default_is_secure = cfg.getboolean('DEFAULT', "is_secure")
-
     proto = 'https' if config.default_is_secure else 'http'
     config.default_endpoint = "%s://%s:%d" % (proto, config.default_host, config.default_port)
 
@@ -181,12 +179,10 @@ def setup():
         config.main_kms_keyid = cfg.get('s3 main',"kms_keyid")
     except (configparser.NoSectionError, configparser.NoOptionError):
         config.main_kms_keyid = 'testkey-1'
-
     try:
         config.main_kms_keyid2 = cfg.get('s3 main',"kms_keyid2")
     except (configparser.NoSectionError, configparser.NoOptionError):
         config.main_kms_keyid2 = 'testkey-2'
-
     try:
         config.main_api_name = cfg.get('s3 main',"api_name")
     except (configparser.NoSectionError, configparser.NoOptionError):
@@ -199,12 +195,6 @@ def setup():
     config.alt_user_id = cfg.get('s3 alt',"user_id")
     config.alt_email = cfg.get('s3 alt',"email")
 
-    config.tenant_access_key = cfg.get('s3 tenant',"access_key")
-    config.tenant_secret_key = cfg.get('s3 tenant',"secret_key")
-    config.tenant_display_name = cfg.get('s3 tenant',"display_name")
-    config.tenant_user_id = cfg.get('s3 tenant',"user_id")
-    config.tenant_email = cfg.get('s3 tenant',"email")
-
     # vars from the fixtures section
     try:
         template = cfg.get('fixtures', "bucket prefix")
@@ -213,22 +203,17 @@ def setup():
     prefix = choose_bucket_prefix(template=template)
 
     alt_client = get_alt_client()
-    tenant_client = get_tenant_client()
     nuke_prefixed_buckets(prefix=prefix)
     nuke_prefixed_buckets(prefix=prefix, client=alt_client)
-    nuke_prefixed_buckets(prefix=prefix, client=tenant_client)
 
 def teardown():
     alt_client = get_alt_client()
-    tenant_client = get_tenant_client()
     nuke_prefixed_buckets(prefix=prefix)
     nuke_prefixed_buckets(prefix=prefix, client=alt_client)
-    nuke_prefixed_buckets(prefix=prefix, client=tenant_client)
 
 def get_client(client_config=None):
     if client_config == None:
         client_config = Config(signature_version='s3v4')
-
     client = boto3.client(service_name='s3',
                         aws_access_key_id=config.main_access_key,
                         aws_secret_access_key=config.main_secret_key,
@@ -237,47 +222,15 @@ def get_client(client_config=None):
                         config=client_config)
     return client
 
-def get_v2_client():
-    client = boto3.client(service_name='s3',
-                        aws_access_key_id=config.main_access_key,
-                        aws_secret_access_key=config.main_secret_key,
-                        endpoint_url=config.default_endpoint,
-                        use_ssl=config.default_is_secure,
-                        config=Config(signature_version='s3'))
-    return client
-
 def get_alt_client(client_config=None):
     if client_config == None:
         client_config = Config(signature_version='s3v4')
-
     client = boto3.client(service_name='s3',
                         aws_access_key_id=config.alt_access_key,
                         aws_secret_access_key=config.alt_secret_key,
                         endpoint_url=config.default_endpoint,
                         use_ssl=config.default_is_secure,
                         config=client_config)
-    return client
-
-def get_tenant_client(client_config=None):
-    if client_config == None:
-        client_config = Config(signature_version='s3v4')
-
-    client = boto3.client(service_name='s3',
-                        aws_access_key_id=config.tenant_access_key,
-                        aws_secret_access_key=config.tenant_secret_key,
-                        endpoint_url=config.default_endpoint,
-                        use_ssl=config.default_is_secure,
-                        config=client_config)
-    return client
-
-def get_tenant_iam_client():
-
-    client = boto3.client(service_name='iam',
-                          region_name='us-east-1',
-                          aws_access_key_id=config.tenant_access_key,
-                          aws_secret_access_key=config.tenant_secret_key,
-                          endpoint_url=config.default_endpoint,
-                          use_ssl=config.default_is_secure)
     return client
 
 def get_unauthenticated_client():
@@ -297,20 +250,6 @@ def get_bad_auth_client(aws_access_key_id='badauth'):
                         use_ssl=config.default_is_secure,
                         config=Config(signature_version='s3v4'))
     return client
-
-def get_svc_client(client_config=None, svc='s3'):
-    if client_config == None:
-        client_config = Config(signature_version='s3v4')
-
-    client = boto3.client(service_name=svc,
-                        aws_access_key_id=config.main_access_key,
-                        aws_secret_access_key=config.main_secret_key,
-                        endpoint_url=config.default_endpoint,
-                        use_ssl=config.default_is_secure,
-                        config=client_config)
-    return client
-
-bucket_counter = itertools.count(1)
 
 def get_new_bucket_name():
     """
@@ -341,7 +280,7 @@ def get_new_bucket_resource(name=None):
     if name is None:
         name = get_new_bucket_name()
     bucket = s3.Bucket(name)
-    bucket_location = bucket.create()
+    _ = bucket.create()
     return bucket
 
 def get_new_bucket(client=None, name=None):
@@ -384,14 +323,8 @@ def get_main_display_name():
 def get_main_user_id():
     return config.main_user_id
 
-def get_main_email():
-    return config.main_email
-
 def get_main_api_name():
     return config.main_api_name
-
-def get_main_kms_keyid():
-    return config.main_kms_keyid
 
 def get_secondary_kms_keyid():
     return config.main_kms_keyid2
@@ -408,9 +341,6 @@ def get_alt_display_name():
 def get_alt_user_id():
     return config.alt_user_id
 
-def get_alt_email():
-    return config.alt_email
-
 def get_tenant_aws_access_key():
     return config.tenant_access_key
 
@@ -422,6 +352,3 @@ def get_tenant_display_name():
 
 def get_tenant_user_id():
     return config.tenant_user_id
-
-def get_tenant_email():
-    return config.tenant_email

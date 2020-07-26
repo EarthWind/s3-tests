@@ -53,10 +53,14 @@ from . import (
     )
 
 def _bucket_is_empty(bucket):
+    """
+    test a bucket is empty or not
+    """
     is_empty = True
-    for obj in bucket.objects.all():
+    for _ in bucket.objects.all():
         is_empty = False
         break
+
     return is_empty
 
 def _create_objects(bucket=None, bucket_name=None, keys=[]):
@@ -70,15 +74,19 @@ def _create_objects(bucket=None, bucket_name=None, keys=[]):
         bucket = get_new_bucket_resource(name=bucket_name)
 
     for key in keys:
-        obj = bucket.put_object(Body=key, Key=key)
+        _ = bucket.put_object(Body=key, Key=key)
 
     return bucket_name
 
 def _get_body(response):
+    """
+    get http response body
+    """
     body = response['Body']
     got = body.read()
     if type(got) is bytes:
         got = got.decode()
+        
     return got
 
 def check_bad_bucket_name(bucket_name):
