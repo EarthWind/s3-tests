@@ -52,6 +52,7 @@ from . import (
     nuke_prefixed_buckets,
     )
 
+
 def _bucket_is_empty(bucket):
     """
     test a bucket is empty or not
@@ -62,6 +63,7 @@ def _bucket_is_empty(bucket):
         break
 
     return is_empty
+
 
 def _create_objects(bucket=None, bucket_name=None, keys=[]):
     """
@@ -78,6 +80,7 @@ def _create_objects(bucket=None, bucket_name=None, keys=[]):
 
     return bucket_name
 
+
 def _get_body(response):
     """
     get http response body
@@ -88,6 +91,7 @@ def _get_body(response):
         got = got.decode()
         
     return got
+
 
 def check_bad_bucket_name(bucket_name):
     """
@@ -100,19 +104,6 @@ def check_bad_bucket_name(bucket_name):
     eq(status, 400)
     eq(error_code, 'InvalidBucketName')
 
-
-# AWS does not enforce all documented bucket restrictions.
-# http://docs.amazonwebservices.com/AmazonS3/2006-03-01/dev/index.html?BucketRestrictions.html
-@attr('fails_on_aws')
-# Breaks DNS with SubdomainCallingFormat
-@attr('fails_with_subdomain')
-@attr(resource='bucket')
-@attr(method='put')
-@attr(operation='name begins with underscore')
-@attr(assertion='fails with subdomain: 400')
-def test_bucket_create_naming_bad_starts_nonalpha():
-    bucket_name = get_new_bucket_name()
-    check_bad_bucket_name('_' + bucket_name)
 
 def check_invalid_bucketname(invalid_name):
     """
@@ -132,52 +123,6 @@ def check_invalid_bucketname(invalid_name):
     status, error_code = _get_status_and_error_code(e.response)
     return (status, error_code)
 
-@attr(resource='bucket')
-@attr(method='put')
-@attr(operation='empty name')
-@attr(assertion='fails 405')
-# TODO: remove this fails_on_rgw when I fix it
-@attr('fails_on_rgw')
-def test_bucket_create_naming_bad_short_empty():
-    invalid_bucketname = ''
-    status, error_code = check_invalid_bucketname(invalid_bucketname)
-    eq(status, 405)
-    eq(error_code, 'MethodNotAllowed')
-
-@attr(resource='bucket')
-@attr(method='put')
-@attr(operation='short (one character) name')
-@attr(assertion='fails 400')
-def test_bucket_create_naming_bad_short_one():
-    check_bad_bucket_name('a')
-
-@attr(resource='bucket')
-@attr(method='put')
-@attr(operation='short (two character) name')
-@attr(assertion='fails 400')
-def test_bucket_create_naming_bad_short_two():
-    check_bad_bucket_name('aa')
-
-# Breaks DNS with SubdomainCallingFormat
-@attr('fails_with_subdomain')
-@attr(resource='bucket')
-@attr(method='put')
-@attr(operation='excessively long names')
-@attr(assertion='fails with subdomain: 400')
-# TODO: remove this fails_on_rgw when I fix it
-@attr('fails_on_rgw')
-def test_bucket_create_naming_bad_long():
-    invalid_bucketname = 256*'a'
-    status, error_code = check_invalid_bucketname(invalid_bucketname)
-    eq(status, 400)
-
-    invalid_bucketname = 280*'a'
-    status, error_code = check_invalid_bucketname(invalid_bucketname)
-    eq(status, 400)
-
-    invalid_bucketname = 3000*'a'
-    status, error_code = check_invalid_bucketname(invalid_bucketname)
-    eq(status, 400)
 
 def check_good_bucket_name(name, _prefix=None):
     """
@@ -200,6 +145,7 @@ def check_good_bucket_name(name, _prefix=None):
     client = get_client()
     response = client.create_bucket(Bucket=bucket_name)
     eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
+
 
 def _test_bucket_create_naming_good_long(length):
     """
@@ -225,58 +171,125 @@ def _test_bucket_create_naming_good_long(length):
     response = client.create_bucket(Bucket=bucket_name)
     eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
 
+
+def check_access_denied(fn, *args, **kwargs):
+    e = assert_raises(ClientError, fn, *args, **kwargs)
+    status = _get_status(e.response)
+    eq(status, 403)
+
+
+def check_grants(got, want):
+    """
+    Check that grants list in got matches the dictionaries in want,
+    in any order.
+    """
+    eq(len(got), len(want))
+    for g, w in zip(got, want):
+        w = dict(w)
+        g = dict(g)
+        eq(g.pop('Permission', None), w['Permission'])
+        eq(g['Grantee'].pop('DisplayName', None), w['DisplayName'])
+        eq(g['Grantee'].pop('ID', None), w['ID'])
+        eq(g['Grantee'].pop('Type', None), w['Type'])
+        eq(g['Grantee'].pop('URI', None), w['URI'])
+        eq(g['Grantee'].pop('EmailAddress', None), w['EmailAddress'])
+        eq(g, {'Grantee': {}})
+
+
+# AWS does not enforce all documented bucket restrictions.
+# http://docs.amazonwebservices.com/AmazonS3/2006-03-01/dev/index.html?BucketRestrictions.html
 # Breaks DNS with SubdomainCallingFormat
-@attr('fails_with_subdomain')
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='name begins with underscore')
+@attr(assertion='fails with subdomain: 400')
+def test_bucket_create_naming_bad_starts_nonalpha():
+    bucket_name = get_new_bucket_name()
+    check_bad_bucket_name('_' + bucket_name)
+
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='empty name')
+@attr(assertion='fails 405')
+def test_bucket_create_naming_bad_short_empty():
+    invalid_bucketname = ''
+    status, error_code = check_invalid_bucketname(invalid_bucketname)
+    eq(status, 405)
+    eq(error_code, 'MethodNotAllowed')
+
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='short (one character) name')
+@attr(assertion='fails 400')
+def test_bucket_create_naming_bad_short_one():
+    check_bad_bucket_name('a')
+
+
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='short (two character) name')
+@attr(assertion='fails 400')
+def test_bucket_create_naming_bad_short_two():
+    check_bad_bucket_name('aa')
+
+
+# Breaks DNS with SubdomainCallingFormat
+@attr(resource='bucket')
+@attr(method='put')
+@attr(operation='excessively long names')
+@attr(assertion='fails with subdomain: 400')
+def test_bucket_create_naming_bad_long():
+    invalid_bucketname = 256*'a'
+    status, error_code = check_invalid_bucketname(invalid_bucketname)
+    eq(status, 400)
+    eq(error_code, 'InvalidBucketName')
+
+    invalid_bucketname = 280*'a'
+    status, error_code = check_invalid_bucketname(invalid_bucketname)
+    eq(status, 400)
+    eq(error_code, 'InvalidBucketName')
+
+    invalid_bucketname = 3000*'a'
+    status, error_code = check_invalid_bucketname(invalid_bucketname)
+    eq(status, 400)
+    eq(error_code, 'InvalidBucketName')
+
+
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create w/60 byte name')
-@attr(assertion='fails with subdomain')
-@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
-# Should now pass on AWS even though it has 'fails_on_aws' attr.
 def test_bucket_create_naming_good_long_60():
     _test_bucket_create_naming_good_long(60)
 
-# Breaks DNS with SubdomainCallingFormat
-@attr('fails_with_subdomain')
+
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create w/61 byte name')
-@attr(assertion='fails with subdomain')
-@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
-# Should now pass on AWS even though it has 'fails_on_aws' attr.
 def test_bucket_create_naming_good_long_61():
     _test_bucket_create_naming_good_long(61)
 
-# Breaks DNS with SubdomainCallingFormat
+
 @attr('fails_with_subdomain')
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create w/62 byte name')
-@attr(assertion='fails with subdomain')
-@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
-# Should now pass on AWS even though it has 'fails_on_aws' attr.
 def test_bucket_create_naming_good_long_62():
     _test_bucket_create_naming_good_long(62)
 
 
-# Breaks DNS with SubdomainCallingFormat
 @attr('fails_with_subdomain')
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create w/63 byte name')
-@attr(assertion='fails with subdomain')
 def test_bucket_create_naming_good_long_63():
     _test_bucket_create_naming_good_long(63)
 
 
-# Breaks DNS with SubdomainCallingFormat
-@attr('fails_with_subdomain')
 @attr(resource='bucket')
 @attr(method='get')
 @attr(operation='list w/61 byte name')
-@attr(assertion='fails with subdomain')
-@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
-# Should now pass on AWS even though it has 'fails_on_aws' attr.
 def test_bucket_list_long_name():
     prefix = get_new_bucket_name()
     length = 61
@@ -293,64 +306,50 @@ def test_bucket_list_long_name():
 
 # AWS does not enforce all documented bucket restrictions.
 # http://docs.amazonwebservices.com/AmazonS3/2006-03-01/dev/index.html?BucketRestrictions.html
-@attr('fails_on_aws')
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create w/ip address for name')
-@attr(assertion='fails on aws')
 def test_bucket_create_naming_bad_ip():
     check_bad_bucket_name('192.168.5.123')
 
-# Breaks DNS with SubdomainCallingFormat
-@attr('fails_with_subdomain')
+
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create w/! in name')
-@attr(assertion='fails with subdomain')
-# TODO: remove this fails_on_rgw when I fix it
-@attr('fails_on_rgw')
 def test_bucket_create_naming_bad_punctuation():
     # characters other than [a-zA-Z0-9._-]
     invalid_bucketname = 'alpha!soup'
     status, error_code = check_invalid_bucketname(invalid_bucketname)
-    # TODO: figure out why a 403 is coming out in boto3 but not in boto2.
     eq(status, 400)
     eq(error_code, 'InvalidBucketName')
+
 
 # test_bucket_create_naming_dns_* are valid but not recommended
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create w/underscore in name')
 @attr(assertion='fails')
-@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
-# Should now pass on AWS even though it has 'fails_on_aws' attr.
 def test_bucket_create_naming_dns_underscore():
     invalid_bucketname = 'foo_bar'
     status, error_code = check_invalid_bucketname(invalid_bucketname)
     eq(status, 400)
     eq(error_code, 'InvalidBucketName')
 
-# Breaks DNS with SubdomainCallingFormat
-@attr('fails_with_subdomain')
+
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create w/100 byte name')
-@attr(assertion='fails with subdomain')
-@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
 def test_bucket_create_naming_dns_long():
     prefix = get_prefix()
     assert len(prefix) < 50
     num = 63 - len(prefix)
     check_good_bucket_name(num * 'a')
 
-# Breaks DNS with SubdomainCallingFormat
-@attr('fails_with_subdomain')
+
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create w/dash at end of name')
 @attr(assertion='fails')
-@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
-# Should now pass on AWS even though it has 'fails_on_aws' attr.
 def test_bucket_create_naming_dns_dash_at_end():
     invalid_bucketname = 'foo-'
     status, error_code = check_invalid_bucketname(invalid_bucketname)
@@ -359,13 +358,10 @@ def test_bucket_create_naming_dns_dash_at_end():
 
 
 # Breaks DNS with SubdomainCallingFormat
-@attr('fails_with_subdomain')
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create w/.. in name')
 @attr(assertion='fails')
-@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
-# Should now pass on AWS even though it has 'fails_on_aws' attr.
 def test_bucket_create_naming_dns_dot_dot():
     invalid_bucketname = 'foo..bar'
     status, error_code = check_invalid_bucketname(invalid_bucketname)
@@ -374,13 +370,10 @@ def test_bucket_create_naming_dns_dot_dot():
 
 
 # Breaks DNS with SubdomainCallingFormat
-@attr('fails_with_subdomain')
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create w/.- in name')
 @attr(assertion='fails')
-@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
-# Should now pass on AWS even though it has 'fails_on_aws' attr.
 def test_bucket_create_naming_dns_dot_dash():
     invalid_bucketname = 'foo.-bar'
     status, error_code = check_invalid_bucketname(invalid_bucketname)
@@ -389,13 +382,10 @@ def test_bucket_create_naming_dns_dot_dash():
 
 
 # Breaks DNS with SubdomainCallingFormat
-@attr('fails_with_subdomain')
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create w/-. in name')
 @attr(assertion='fails')
-@attr('fails_on_aws') # <Error><Code>InvalidBucketName</Code><Message>The specified bucket is not valid.</Message>...</Error>
-# Should now pass on AWS even though it has 'fails_on_aws' attr.
 def test_bucket_create_naming_dns_dash_dot():
     invalid_bucketname = 'foo-.bar'
     status, error_code = check_invalid_bucketname(invalid_bucketname)
@@ -411,13 +401,14 @@ def test_bucket_create_exists():
     bucket_name = get_new_bucket_name()
     client = get_client()
 
+    # recreate
     client.create_bucket(Bucket=bucket_name)
     try:
-        response = client.create_bucket(Bucket=bucket_name)
+        _ = client.create_bucket(Bucket=bucket_name)
     except ClientError as e:
         status, error_code = _get_status_and_error_code(e.response)
-        eq(e.status, 409)
-        eq(e.error_code, 'BucketAlreadyOwnedByYou')
+        eq(status, 409)
+        eq(error_code, 'BucketAlreadyOwnedByYou')
 
 @attr(resource='bucket')
 @attr(method='get')
@@ -436,6 +427,7 @@ def test_bucket_get_location():
         location_constraint = None
     eq(response['LocationConstraint'], location_constraint)
 
+"""
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create bucket')
@@ -449,6 +441,7 @@ def test_bucket_get_location():
 def test_bucket_create_naming_good_starts_alpha():
     check_good_bucket_name('foo', _prefix='a'+get_prefix())
 
+
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create bucket')
@@ -461,6 +454,8 @@ def test_bucket_create_naming_good_starts_alpha():
     )
 def test_bucket_create_naming_good_starts_digit():
     check_good_bucket_name('foo', _prefix='0'+get_prefix())
+"""
+
 
 @attr(resource='bucket')
 @attr(method='put')
@@ -469,12 +464,14 @@ def test_bucket_create_naming_good_starts_digit():
 def test_bucket_create_naming_good_contains_period():
     check_good_bucket_name('aaa.111')
 
+
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='create bucket')
 @attr(assertion='name containing hyphen works')
 def test_bucket_create_naming_good_contains_hyphen():
     check_good_bucket_name('aaa-111')
+
 
 @attr(resource='bucket')
 @attr(method='put')
@@ -492,6 +489,7 @@ def test_bucket_recreate_not_overriding():
 
     objs_list = get_objects_list(bucket_name)
     eq(key_names, objs_list)
+
 
 @attr(resource='object')
 @attr(method='put')
@@ -527,6 +525,7 @@ def test_bucket_create_special_key_names():
         eq(name, body)
         client.put_object_acl(Bucket=bucket_name, Key=name, ACL='private')
 
+
 @attr(resource='bucket')
 @attr(method='put')
 @attr(operation='re-create by non-owner')
@@ -545,28 +544,7 @@ def test_bucket_create_exists_nonowner():
     eq(status, 409)
     eq(error_code, 'BucketAlreadyExists')
 
-def check_access_denied(fn, *args, **kwargs):
-    e = assert_raises(ClientError, fn, *args, **kwargs)
-    status = _get_status(e.response)
-    eq(status, 403)
-
-def check_grants(got, want):
-    """
-    Check that grants list in got matches the dictionaries in want,
-    in any order.
-    """
-    eq(len(got), len(want))
-    for g, w in zip(got, want):
-        w = dict(w)
-        g = dict(g)
-        eq(g.pop('Permission', None), w['Permission'])
-        eq(g['Grantee'].pop('DisplayName', None), w['DisplayName'])
-        eq(g['Grantee'].pop('ID', None), w['ID'])
-        eq(g['Grantee'].pop('Type', None), w['Type'])
-        eq(g['Grantee'].pop('URI', None), w['URI'])
-        eq(g['Grantee'].pop('EmailAddress', None), w['EmailAddress'])
-        eq(g, {'Grantee': {}})
-
+"""
 @attr(resource='bucket')
 @attr(method='get')
 @attr(operation='default acl')
@@ -598,11 +576,11 @@ def test_bucket_acl_default():
             ],
         )
 
+
 @attr(resource='bucket')
 @attr(method='get')
 @attr(operation='public-read acl')
 @attr(assertion='read back expected defaults')
-@attr('fails_on_aws') # <Error><Code>IllegalLocationConstraintException</Code><Message>The unspecified location constraint is incompatible for the region specific endpoint this request was sent to.</Message>
 def test_bucket_acl_canned_during_create():
     bucket_name = get_new_bucket_name()
     client = get_client()
@@ -767,6 +745,7 @@ def test_bucket_acl_canned_authenticatedread():
                 ),
             ],
         )
+"""
 
 @attr(resource='bucket')
 @attr(method='ACLs')
@@ -779,6 +758,7 @@ def test_bucket_acl_canned_private_to_private():
     response = client.put_bucket_acl(Bucket=bucket_name, ACL='private')
     eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
 
+
 @attr(resource='bucket')
 @attr(method='get')
 @attr(operation='list all buckets')
@@ -786,22 +766,21 @@ def test_bucket_acl_canned_private_to_private():
 def test_buckets_create_then_list():
     client = get_client()
     bucket_names = []
-    for i in range(5):
+    for _ in range(5):
         bucket_name = get_new_bucket_name()
         bucket_names.append(bucket_name)
-
     for name in bucket_names:
         client.create_bucket(Bucket=name)
 
     response = client.list_buckets()
     bucket_dicts = response['Buckets']
     buckets_list = []
-
     buckets_list = get_buckets_list()
 
     for name in bucket_names:
         if name not in buckets_list:
             raise RuntimeError("S3 implementation's GET on Service did not return bucket we created: %r", name)
+
 
 @attr(resource='bucket')
 @attr(method='del')
@@ -818,6 +797,7 @@ def test_bucket_create_delete():
     eq(status, 404)
     eq(error_code, 'NoSuchBucket')
 
+
 @attr(resource='bucket')
 @attr(method='head')
 @attr(operation='head bucket')
@@ -829,6 +809,7 @@ def test_bucket_head():
     response = client.head_bucket(Bucket=bucket_name)
     eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
 
+
 @attr(resource='bucket')
 @attr(method='get')
 @attr(operation='list')
@@ -838,6 +819,7 @@ def test_bucket_list_empty():
     is_empty = _bucket_is_empty(bucket)
     eq(is_empty, True)
 
+
 @attr(resource='bucket')
 @attr(method='get')
 @attr(operation='list')
@@ -845,9 +827,10 @@ def test_bucket_list_empty():
 def test_bucket_list_distinct():
     bucket1 = get_new_bucket_resource()
     bucket2 = get_new_bucket_resource()
-    obj = bucket1.put_object(Body='str', Key='asdf')
+    _ = bucket1.put_object(Body='str', Key='asdf')
     is_empty = _bucket_is_empty(bucket2)
     eq(is_empty, True)
+
 
 @attr(resource='bucket')
 @attr(method='get')
@@ -868,6 +851,7 @@ def test_bucket_list_many():
     eq(len(keys), 1)
     eq(response['IsTruncated'], False)
     eq(keys, ['foo'])
+
 
 @attr(resource='bucket')
 @attr(method='get')
@@ -890,6 +874,7 @@ def test_bucket_listv2_many():
     eq(response['IsTruncated'], False)
     eq(keys, ['foo'])
 
+
 @attr(resource='bucket')
 @attr(method='get')
 @attr(operation='list')
@@ -897,13 +882,13 @@ def test_bucket_listv2_many():
 @attr('list-objects-v2')
 def test_basic_key_count():
     client = get_client()
-    bucket_names = []
     bucket_name = get_new_bucket_name()
     client.create_bucket(Bucket=bucket_name)
     for j in range(5):
             client.put_object(Bucket=bucket_name, Key=str(j))
     response1 = client.list_objects_v2(Bucket=bucket_name)
     eq(response1['KeyCount'], 5)
+
 
 def _get_keys(response):
     """

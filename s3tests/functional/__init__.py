@@ -15,9 +15,11 @@ config = munch.Munch
 prefix = None
 bucket_counter = itertools.count(1)
 
+
 def get_prefix():
     assert prefix is not None
     return prefix
+
 
 def choose_bucket_prefix(template, max_len=30):
     """
@@ -42,6 +44,7 @@ def choose_bucket_prefix(template, max_len=30):
             ),
         )
 
+
 def get_buckets_list(client=None, prefix=None):
     if client == None:
         client = get_client()
@@ -55,6 +58,7 @@ def get_buckets_list(client=None, prefix=None):
             buckets_list.append(bucket['Name'])
 
     return buckets_list
+
 
 def get_objects_list(bucket, client=None, prefix=None):
     if client == None:
@@ -73,6 +77,7 @@ def get_objects_list(bucket, client=None, prefix=None):
 
     return objects_list
 
+
 def get_versioned_objects_list(bucket, client=None):
     if client == None:
         client = get_client()
@@ -88,6 +93,7 @@ def get_versioned_objects_list(bucket, client=None):
             versioned_objects_list.append(versioned_obj)
 
     return versioned_objects_list
+
 
 def get_delete_markers_list(bucket, client=None):
     if client == None:
@@ -137,6 +143,7 @@ def nuke_prefixed_buckets(prefix, client=None):
             raise err
 
     print('Done with cleanup of buckets in tests.')
+
 
 @pytest.fixture(scope="session", autouse=True)
 def read_configuration():
@@ -206,10 +213,12 @@ def read_configuration():
     nuke_prefixed_buckets(prefix=prefix)
     nuke_prefixed_buckets(prefix=prefix, client=alt_client)
 
+
 def teardown():
     alt_client = get_alt_client()
     nuke_prefixed_buckets(prefix=prefix)
     nuke_prefixed_buckets(prefix=prefix, client=alt_client)
+
 
 def get_client(client_config=None):
     if client_config == None:
@@ -222,6 +231,7 @@ def get_client(client_config=None):
                         config=client_config)
     return client
 
+
 def get_alt_client(client_config=None):
     if client_config == None:
         client_config = Config(signature_version='s3v4')
@@ -233,6 +243,7 @@ def get_alt_client(client_config=None):
                         config=client_config)
     return client
 
+
 def get_unauthenticated_client():
     client = boto3.client(service_name='s3',
                         aws_access_key_id='',
@@ -242,6 +253,7 @@ def get_unauthenticated_client():
                         config=Config(signature_version=UNSIGNED))
     return client
 
+
 def get_bad_auth_client(aws_access_key_id='badauth'):
     client = boto3.client(service_name='s3',
                         aws_access_key_id=aws_access_key_id,
@@ -250,6 +262,7 @@ def get_bad_auth_client(aws_access_key_id='badauth'):
                         use_ssl=config.default_is_secure,
                         config=Config(signature_version='s3v4'))
     return client
+
 
 def get_new_bucket_name():
     """
@@ -264,6 +277,7 @@ def get_new_bucket_name():
         num=next(bucket_counter),
         )
     return name
+
 
 def get_new_bucket_resource(name=None):
     """
@@ -282,6 +296,7 @@ def get_new_bucket_resource(name=None):
     bucket = s3.Bucket(name)
     _ = bucket.create()
     return bucket
+
 
 def get_new_bucket(client=None, name=None):
     """
@@ -302,53 +317,70 @@ def get_new_bucket(client=None, name=None):
 def get_config_is_secure():
     return config.default_is_secure
 
+
 def get_config_host():
     return config.default_host
+
 
 def get_config_port():
     return config.default_port
 
+
 def get_config_endpoint():
     return config.default_endpoint
+
 
 def get_main_aws_access_key():
     return config.main_access_key
 
+
 def get_main_aws_secret_key():
     return config.main_secret_key
+
 
 def get_main_display_name():
     return config.main_display_name
 
+
 def get_main_user_id():
     return config.main_user_id
+
 
 def get_main_api_name():
     return config.main_api_name
 
+
 def get_secondary_kms_keyid():
     return config.main_kms_keyid2
+
 
 def get_alt_aws_access_key():
     return config.alt_access_key
 
+
 def get_alt_aws_secret_key():
     return config.alt_secret_key
+
 
 def get_alt_display_name():
     return config.alt_display_name
 
+
 def get_alt_user_id():
     return config.alt_user_id
+
 
 def get_tenant_aws_access_key():
     return config.tenant_access_key
 
+
 def get_tenant_aws_secret_key():
     return config.tenant_secret_key
 
+
 def get_tenant_display_name():
     return config.tenant_display_name
+
 
 def get_tenant_user_id():
     return config.tenant_user_id

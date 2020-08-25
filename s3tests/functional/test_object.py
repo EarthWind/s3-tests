@@ -73,21 +73,8 @@ def _create_objects(bucket=None, bucket_name=None, keys=[]):
         bucket_name = get_new_bucket_name()
     if bucket is None:
         bucket = get_new_bucket_resource(name=bucket_name)
-
     for key in keys:
-        obj = bucket.put_object(Body=key, Key=key)
-
-    return bucket_name
-
-def _setup_bucket_object_acl(bucket_acl, object_acl):
-    """
-    add a foo key, and specified key and bucket acls to
-    a (new or existing) bucket.
-    """
-    bucket_name = get_new_bucket_name()
-    client = get_client()
-    client.create_bucket(ACL=bucket_acl, Bucket=bucket_name)
-    client.put_object(ACL=object_acl, Bucket=bucket_name, Key='foo')
+        _ = bucket.put_object(Body=key, Key=key)
 
     return bucket_name
 
@@ -252,112 +239,6 @@ def test_object_write_file():
     response = client.get_object(Bucket=bucket_name, Key='foo')
     body = _get_body(response)
     eq(body, 'bar')
-
-@attr(resource='object')
-@attr(method='get')
-@attr(operation='publically readable bucket')
-@attr(assertion='bucket is readable')
-def test_object_raw_get():
-    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
-
-    unauthenticated_client = get_unauthenticated_client()
-    response = unauthenticated_client.get_object(Bucket=bucket_name, Key='foo')
-    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
-
-@attr(resource='object')
-@attr(method='get')
-@attr(operation='deleted object and bucket')
-@attr(assertion='fails 404')
-def test_object_raw_get_bucket_gone():
-    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
-    client = get_client()
-
-    client.delete_object(Bucket=bucket_name, Key='foo')
-    client.delete_bucket(Bucket=bucket_name)
-
-    unauthenticated_client = get_unauthenticated_client()
-
-    e = assert_raises(ClientError, unauthenticated_client.get_object, Bucket=bucket_name, Key='foo')
-    status, error_code = _get_status_and_error_code(e.response)
-    eq(status, 404)
-    eq(error_code, 'NoSuchBucket')
-
-@attr(resource='object')
-@attr(method='get')
-@attr(operation='deleted object and bucket')
-@attr(assertion='fails 404')
-def test_object_delete_key_bucket_gone():
-    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
-    client = get_client()
-
-    client.delete_object(Bucket=bucket_name, Key='foo')
-    client.delete_bucket(Bucket=bucket_name)
-
-    unauthenticated_client = get_unauthenticated_client()
-
-    e = assert_raises(ClientError, unauthenticated_client.delete_object, Bucket=bucket_name, Key='foo')
-    status, error_code = _get_status_and_error_code(e.response)
-    eq(status, 404)
-    eq(error_code, 'NoSuchBucket')
-
-@attr(resource='object')
-@attr(method='get')
-@attr(operation='deleted object')
-@attr(assertion='fails 404')
-def test_object_raw_get_object_gone():
-    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
-    client = get_client()
-
-    client.delete_object(Bucket=bucket_name, Key='foo')
-
-    unauthenticated_client = get_unauthenticated_client()
-
-    e = assert_raises(ClientError, unauthenticated_client.get_object, Bucket=bucket_name, Key='foo')
-    status, error_code = _get_status_and_error_code(e.response)
-    eq(status, 404)
-    eq(error_code, 'NoSuchKey')
-
-@attr(resource='object')
-@attr(method='ACLs')
-@attr(operation='authenticated on public bucket/private object')
-@attr(assertion='succeeds')
-def test_object_raw_authenticated_object_acl():
-    bucket_name = _setup_bucket_object_acl('public-read', 'private')
-
-    client = get_client()
-    response = client.get_object(Bucket=bucket_name, Key='foo')
-    eq(response['ResponseMetadata']['HTTPStatusCode'], 200)
-
-@attr(resource='object')
-@attr(method='get')
-@attr(operation='authenticated on deleted object and bucket')
-@attr(assertion='fails 404')
-def test_object_raw_authenticated_bucket_gone():
-    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
-    client = get_client()
-
-    client.delete_object(Bucket=bucket_name, Key='foo')
-    client.delete_bucket(Bucket=bucket_name)
-
-    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='foo')
-    status, error_code = _get_status_and_error_code(e.response)
-    eq(status, 404)
-    eq(error_code, 'NoSuchBucket')
-
-@attr(resource='object')
-@attr(method='get')
-@attr(operation='authenticated on deleted object')
-@attr(assertion='fails 404')
-def test_object_raw_authenticated_object_gone():
-    bucket_name = _setup_bucket_object_acl('public-read', 'public-read')
-    client = get_client()
-
-    client.delete_object(Bucket=bucket_name, Key='foo')
-
-    e = assert_raises(ClientError, client.get_object, Bucket=bucket_name, Key='foo')
-    status, error_code = _get_status_and_error_code(e.response)
-    eq(status, 404)
-    eq(error_code, 'NoSuchKey')
 
 @attr(resource='object')
 @attr(method='put')
